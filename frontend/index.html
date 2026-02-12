@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Azure Datacenters - 3D Globe Visualization</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            overflow: hidden;
+            color: white;
+        }
+
+        #globe-container {
+            width: 100vw;
+            height: 100vh;
+            cursor: grab;
+        }
+
+        #globe-container:active {
+            cursor: grabbing;
+        }
+
+        .header {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            text-align: center;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 15px 30px;
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
+        }
+
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 5px;
+        }
+
+        .header p {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 100;
+            text-align: center;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 30px 50px;
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+        }
+
+        #loading.hidden {
+            display: none;
+        }
+
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 4px solid white;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        #error {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 100;
+            text-align: center;
+            background: rgba(220, 38, 38, 0.9);
+            padding: 30px 50px;
+            border-radius: 15px;
+            max-width: 500px;
+        }
+
+        #error.hidden {
+            display: none;
+        }
+
+        #error h2 {
+            margin-bottom: 10px;
+        }
+
+        #error button {
+            margin-top: 15px;
+            padding: 10px 20px;
+            background: white;
+            color: #dc2626;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+        }
+
+        #error button:hover {
+            background: #f3f4f6;
+        }
+
+        .tooltip {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.9);
+            padding: 12px 16px;
+            border-radius: 8px;
+            pointer-events: none;
+            z-index: 1000;
+            font-size: 14px;
+            line-height: 1.5;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .tooltip.hidden {
+            display: none;
+        }
+
+        .tooltip h3 {
+            margin-bottom: 5px;
+            color: #60a5fa;
+            font-size: 16px;
+        }
+
+        .tooltip p {
+            margin: 3px 0;
+            font-size: 13px;
+        }
+
+        .stats {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 15px 20px;
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
+            z-index: 10;
+        }
+
+        .stats h3 {
+            font-size: 14px;
+            margin-bottom: 8px;
+            opacity: 0.8;
+        }
+
+        .stats p {
+            font-size: 24px;
+            font-weight: bold;
+            color: #60a5fa;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🌍 Azure Datacenters Worldwide</h1>
+        <p>Interactive 3D visualization of Microsoft Azure datacenter locations</p>
+    </div>
+
+    <div id="loading">
+        <div class="spinner"></div>
+        <p>Loading datacenter data...</p>
+    </div>
+
+    <div id="error" class="hidden">
+        <h2>⚠️ Error Loading Data</h2>
+        <p id="error-message"></p>
+        <button onclick="location.reload()">Retry</button>
+    </div>
+
+    <div class="stats">
+        <h3>Total Datacenters</h3>
+        <p id="datacenter-count">0</p>
+    </div>
+
+    <div id="tooltip" class="tooltip hidden"></div>
+    <div id="globe-container"></div>
+
+    <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/three-globe@2.33.0/dist/three-globe.min.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <script>
+        // API Configuration
+        const API_URL = 'http://localhost:8000/datacenters';
+
+        // Geocoding mapping for Azure regions and common cities
+        const geocodingMap = {
+            // North America
+            'virginia,united states': { lat: 37.4316, lng: -78.6569 },
+            'iowa,united states': { lat: 41.8780, lng: -93.0977 },
+            'california,united states': { lat: 36.7783, lng: -119.4179 },
+            'washington,united states': { lat: 47.7511, lng: -120.7401 },
+            'texas,united states': { lat: 31.9686, lng: -99.9018 },
+            'arizona,united states': { lat: 34.0489, lng: -111.0937 },
+            'wyoming,united states': { lat: 43.0759, lng: -107.2903 },
+            'toronto,canada': { lat: 43.6532, lng: -79.3832 },
+            'quebec city,canada': { lat: 46.8139, lng: -71.2080 },
+            
+            // Europe
+            'amsterdam,netherlands': { lat: 52.3676, lng: 4.9041 },
+            'dublin,ireland': { lat: 53.3498, lng: -6.2603 },
+            'london,united kingdom': { lat: 51.5074, lng: -0.1278 },
+            'paris,france': { lat: 48.8566, lng: 2.3522 },
+            'frankfurt,germany': { lat: 50.1109, lng: 8.6821 },
+            'zurich,switzerland': { lat: 47.3769, lng: 8.5417 },
+            'stockholm,sweden': { lat: 59.3293, lng: 18.0686 },
+            'warsaw,poland': { lat: 52.2297, lng: 21.0122 },
+            'oslo,norway': { lat: 59.9139, lng: 10.7522 },
+            
+            // Asia Pacific
+            'tokyo,japan': { lat: 35.6762, lng: 139.6503 },
+            'osaka,japan': { lat: 34.6937, lng: 135.5023 },
+            'singapore,singapore': { lat: 1.3521, lng: 103.8198 },
+            'hong kong,china': { lat: 22.3193, lng: 114.1694 },
+            'seoul,south korea': { lat: 37.5665, lng: 126.9780 },
+            'sydney,australia': { lat: -33.8688, lng: 151.2093 },
+            'melbourne,australia': { lat: -37.8136, lng: 144.9631 },
+            'mumbai,india': { lat: 19.0760, lng: 72.8777 },
+            'pune,india': { lat: 18.5204, lng: 73.8567 },
+            'chennai,india': { lat: 13.0827, lng: 80.2707 },
+            
+            // Middle East & Africa
+            'dubai,united arab emirates': { lat: 25.2048, lng: 55.2708 },
+            'doha,qatar': { lat: 25.2854, lng: 51.5310 },
+            'johannesburg,south africa': { lat: -26.2041, lng: 28.0473 },
+            'cape town,south africa': { lat: -33.9249, lng: 18.4241 },
+            
+            // South America
+            'são paulo,brazil': { lat: -23.5505, lng: -46.6333 },
+            'rio de janeiro,brazil': { lat: -22.9068, lng: -43.1729 },
+            'santiago,chile': { lat: -33.4489, lng: -70.6693 },
+        };
+
+        /**
+         * Convert city and country to latitude and longitude
+         */
+        function geocode(city, country) {
+            const key = `${city.toLowerCase()},${country.toLowerCase()}`;
+            
+            if (geocodingMap[key]) {
+                return geocodingMap[key];
+            }
+            
+            // Fallback: generate random coordinates (not ideal but prevents errors)
+            console.warn(`No geocoding found for ${city}, ${country}`);
+            return {
+                lat: (Math.random() - 0.5) * 180,
+                lng: (Math.random() - 0.5) * 360
+            };
+        }
+
+        /**
+         * Fetch datacenter data from backend API
+         */
+        async function fetchDatacenters() {
+            try {
+                const response = await fetch(API_URL);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error('Error fetching datacenter data:', error);
+                throw error;
+            }
+        }
+
+        /**
+         * Show error message
+         */
+        function showError(message) {
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('error-message').textContent = message;
+            document.getElementById('error').classList.remove('hidden');
+        }
+
+        /**
+         * Initialize and render the globe
+         */
+        async function initGlobe() {
+            try {
+                // Fetch datacenter data
+                const datacenters = await fetchDatacenters();
+                
+                if (!datacenters || datacenters.length === 0) {
+                    showError('No datacenter data available. Please ensure the backend is running.');
+                    return;
+                }
+
+                // Update stats
+                document.getElementById('datacenter-count').textContent = datacenters.length;
+
+                // Convert datacenter data to points with coordinates
+                const points = datacenters.map(dc => ({
+                    ...dc,
+                    ...geocode(dc.city, dc.country)
+                }));
+
+                // Initialize Three.js scene
+                const container = document.getElementById('globe-container');
+                const width = window.innerWidth;
+                const height = window.innerHeight;
+
+                // Create renderer
+                const renderer = new THREE.WebGLRenderer({ antialias: true });
+                renderer.setSize(width, height);
+                container.appendChild(renderer.domElement);
+
+                // Create scene
+                const scene = new THREE.Scene();
+                scene.background = new THREE.Color(0x000000);
+
+                // Create camera
+                const camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
+                camera.position.z = 250;
+
+                // Add ambient light
+                const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+                scene.add(ambientLight);
+
+                // Add directional light
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+                directionalLight.position.set(1, 1, 1);
+                scene.add(directionalLight);
+
+                // Initialize globe
+                const globe = new ThreeGlobe()
+                    .globeImageUrl('//unpkg.com/three-globe/example/img/earth-blue-marble.jpg')
+                    .bumpImageUrl('//unpkg.com/three-globe/example/img/earth-topology.png')
+                    .pointsData(points)
+                    .pointAltitude(0.01)
+                    .pointRadius(0.6)
+                    .pointColor(() => '#ff6b6b');
+
+                scene.add(globe);
+
+                // Add orbit controls
+                const controls = new THREE.OrbitControls(camera, renderer.domElement);
+                controls.enableDamping = true;
+                controls.dampingFactor = 0.05;
+                controls.rotateSpeed = 0.5;
+                controls.minDistance = 150;
+                controls.maxDistance = 500;
+
+                // Custom tooltip
+                const tooltip = document.getElementById('tooltip');
+                const raycaster = new THREE.Raycaster();
+                const mouse = new THREE.Vector2();
+
+                // Mouse move handler for custom tooltips
+                function onMouseMove(event) {
+                    mouse.x = (event.clientX / width) * 2 - 1;
+                    mouse.y = -(event.clientY / height) * 2 + 1;
+
+                    raycaster.setFromCamera(mouse, camera);
+                    const intersects = raycaster.intersectObjects(scene.children, true);
+
+                    if (intersects.length > 0) {
+                        // Check if we're hovering over a point
+                        const point = points.find(p => {
+                            const pointPosition = globe.getCoords(p.lat, p.lng, 0.01);
+                            const distance = intersects[0].point.distanceTo(pointPosition);
+                            return distance < 5;
+                        });
+
+                        if (point) {
+                            tooltip.innerHTML = `
+                                <h3>${point.name}</h3>
+                                <p>📍 ${point.city}, ${point.country}</p>
+                            `;
+                            tooltip.style.left = event.clientX + 15 + 'px';
+                            tooltip.style.top = event.clientY + 15 + 'px';
+                            tooltip.classList.remove('hidden');
+                        } else {
+                            tooltip.classList.add('hidden');
+                        }
+                    } else {
+                        tooltip.classList.add('hidden');
+                    }
+                }
+
+                window.addEventListener('mousemove', onMouseMove);
+
+                // Auto-rotate the globe
+                controls.autoRotate = true;
+                controls.autoRotateSpeed = 0.5;
+
+                // Animation loop
+                function animate() {
+                    requestAnimationFrame(animate);
+                    controls.update();
+                    renderer.render(scene, camera);
+                }
+
+                // Handle window resize
+                window.addEventListener('resize', () => {
+                    const newWidth = window.innerWidth;
+                    const newHeight = window.innerHeight;
+                    
+                    camera.aspect = newWidth / newHeight;
+                    camera.updateProjectionMatrix();
+                    renderer.setSize(newWidth, newHeight);
+                });
+
+                // Hide loading, start animation
+                document.getElementById('loading').classList.add('hidden');
+                animate();
+
+            } catch (error) {
+                console.error('Error initializing globe:', error);
+                showError(`Failed to load datacenter data: ${error.message}. Please ensure the backend API is running on ${API_URL}`);
+            }
+        }
+
+        // Initialize on page load
+        window.addEventListener('DOMContentLoaded', initGlobe);
+    </script>
+</body>
+</html>
